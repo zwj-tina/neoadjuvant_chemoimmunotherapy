@@ -1,6 +1,4 @@
-# =========================
-# 0) 环境与工具
-# =========================
+ # 0)
 suppressPackageStartupMessages({
   library(tidyverse)
   library(readxl)
@@ -14,25 +12,23 @@ suppressPackageStartupMessages({
   library(limma)
 })
 
-# 自定义工具（embedding.similarity / palantir 包装等）
+ # embedding.similarity / palantir
 source("/home/zwj/raid1/MSD/BEYOND/BEYOND_DLPFC-main/2. Cell-type analysis/utils/load.code.env.R")
 source("/home/zwj/raid1/MSD/BEYOND/BEYOND_DLPFC-main/4. BEYOND/utils/utils.R")
 
-# Python 侧依赖
+ # Python
 sc      <- reticulate::import("scanpy")
 anndata <- reticulate::import("anndata")
 pd      <- reticulate::import("pandas")
 np      <- reticulate::import("numpy")
-# 如需：reticulate::py_install("phate", pip = TRUE)
+ # reticulate::py_install("phate", pip = TRUE)
 
 set.seed(1); np$random$seed(1L)
 
-# 用户选项：是否仅保留 pre（如要做 pre→post 的 alluvial，请设为 FALSE）
-keep_only_state <- NULL  # 可设为 "pre" 或 "post"；NULL 表示保留全部
+# User option: keep only the pre state; set to FALSE for a pre-to-post alluvial plot
+keep_only_state <- NULL # set to "pre" or "post"; NULL keeps all states
 
-# =========================
-# 1) 把“样本×亚群计数”转成“样本×亚群比例”
-# =========================
+# 1) Convert sample x subcluster counts into sample x subcluster proportions
 T_cell <- read.csv("/home/zwj/raid1/MSD/data/h5ad2/T_harmony.csv")
 number <- table(T_cell$sampleID)
 T_cell <- T_cell[T_cell$sampleID %in% names(which(number > 200)),]
@@ -43,11 +39,10 @@ T_df <- as.data.frame(T_df / rowSums(T_df))
 colnames(T_df) <- c("sampleID","cell.type","Freq")
 head(T_df)
 
-
 all_df <- T_df
 head(all_df)
 
-# 轨迹基于 T 亚群
+ # T
 all_df <- all_df %>%
   mutate(
     state     = if_else(str_detect(sampleID, "S$"), "post", "pre"),
@@ -61,9 +56,7 @@ if (!is.null(keep_only_state)) {
   all_df <- dplyr::filter(all_df, state == keep_only_state)
 }
 
-# =========================
-# 2) 宽表 ratio（行=样本，列=亚群比例）
-# =========================
+ # 2) ratio==
 ratio <- all_df %>%
   select(sampleID, cell.type, Freq) %>%
   tidyr::pivot_wider(names_from = cell.type, values_from = Freq, values_fill = 0) %>%
@@ -71,10 +64,7 @@ ratio <- all_df %>%
   as.data.frame()
 ratio[1:5,1:5]
 
-
-# =========================
-# 3) 临床合并
-# =========================
+ # 3)
 info <- read.csv("/home/zwj/raid1/MSD/data/info/clinical_info.csv", check.names = FALSE) %>%
   mutate(across(everything(), ~ replace(., is.na(.), "unknown"))) %>%
   filter(pathological_response != "unknown")
@@ -94,29 +84,23 @@ meta_smpl <- meta_smpl %>% filter(sampleID %in% keep_ids) %>% column_to_rownames
 stopifnot(identical(rownames(ratio), rownames(meta_smpl)))
 dim(ratio)
 
-# =========================
-# 4) AnnData + 邻居/聚类 + UMAP/TSNE/PHATE
-# =========================
-# 构建 AnnData 对象
+ # 4) AnnData + / + UMAP/TSNE/PHATE
+ # AnnData
 obs_pd = pd$DataFrame(meta_smpl, index=rownames(meta_smpl))
 ad = anndata$AnnData(X = as.matrix(ratio), obs = obs_pd)
-# 预处理
 sc$pp$pca(ad, n_comps = as.integer(10))
 sc$pp$neighbors(ad, n_neighbors = as.integer(5), metric="cosine")
 
-# 聚类
 sc$tl$leiden(ad, resolution=0.6)
 ad$obs$clusters <- ad$obs$leiden
 
-# 降维
 sc$tl$tsne(ad, use_rep = "X", learning_rate = as.integer(100))
 sc$tl$umap(ad, maxiter = as.integer(3000), spread = 5)
 
 sc$pl$umap(ad, color = "clusters",size = 70)
-# PHATE（核心步骤）
+ # PHATE
 sc$external$tl$phate(ad, n_components = as.integer(4), k = as.integer(3), a = as.integer(4))
 
-##########################################################################
 umap_2d <- as.data.frame(ad$obsm$X_umap)
 colnames(umap_2d)[1:2] <- c("UMAP1","UMAP2")
 umap_2d$clusters <- as.vector(ad$obs$clusters)
@@ -138,15 +122,11 @@ ggsave("/home/zwj/raid1/MSD/figure/pre_LUSC_cluster_UMAP_T_subtypes.pdf", width 
 
 umap_2d
 write.csv(umap_2d,"/home/zwj/raid1/MSD/data/h5ad2/UMAP_cluster.csv")
-#####################################################################
 
-
-# =========================
-# 5) ggplot 数据
-# =========================
+ # 5) ggplot
 df_2d <- as.data.frame(ad$obsm$X_phate)
 colnames(df_2d)[1:2] <- c("PHATE1","PHATE2")
-# 正确的样本顺序（pandas index）
+ # pandas index
 sample_ids <- rownames(ad)
 df_2d$sampleID <- sample_ids
 
@@ -158,15 +138,12 @@ df_2d <- df_2d %>%
   mutate(clusters = as.character(clusters)) %>%
   arrange(match(sampleID, rownames(ratio)))
 
-# 拼接亚群比例
 ratio_df <- ratio %>% as.data.frame() %>% rownames_to_column("sampleID")
 df_2d <- df_2d %>% left_join(ratio_df, by = "sampleID")
 
 stopifnot(!any(is.na(df_2d$PHATE1)), !any(is.na(df_2d$PHATE2)))
 
-# =========================
-# 6) 基础散点图（PHATE）
-# =========================
+ # 6) PHATE
 p1 <- ggplot(df_2d, aes(PHATE1, PHATE2, color = clusters)) +
   geom_point(alpha = 0.6, size = 2) +
   geom_text_repel(aes(label = sampleID), size = 3, max.overlaps = 20) +
@@ -197,7 +174,6 @@ p2 <- ggplot(df_2d, aes(PHATE1, PHATE2, color = histology)) +
   labs(title = "PHATE colored by histology (post only)")
 print(p2)
 ggsave("/home/zwj/raid1/MSD/figure/BEYOND/pre_all_histology_PHATE_T_subtypes.pdf", p2, width = 6.5, height = 6)
-
 
 df_resp <- df_2d
 df_resp <- df_2d %>% filter(pathological_response %in% c("MPR","PD","non-MPR"))
@@ -238,32 +214,30 @@ if (target_feature %in% colnames(df_2d)) {
 }
 ggsave("/home/zwj/raid1/MSD/figure/BEYOND/pre_CD4T_Treg_TNFRSF9high.pdf", p_feat, width = 7, height = 6)
 
-# =========================
-# 7) Palantir all
-# =========================
+ # 7) Palantir all
 suppressPackageStartupMessages({
   library(tidyverse)
   library(mgcv)
   library(reticulate)
   suppressWarnings({
-    if (!requireNamespace("compositions", quietly = TRUE)) message("建议安装 compositions 包以做 CLR 变换")
+    if (!requireNamespace("compositions", quietly = TRUE)) message("Installing the compositions package is recommended for CLR transformation")
   })
 })
 
-# ========== 1) 用 Palantir 计算拟时间 ==========
-# 初始化 Python 模块
+ # ========== 1) Palantir ==========
+ # Python
 palantir_py <- import("palantir", convert = FALSE)
 pandas_py   <- import("pandas",   convert = FALSE)
 numpy_py    <- import("numpy",    convert = FALSE)
 
-# ========== 2) 准备输入数据 ==========
-# ratio: 行是样本（cell），列是亚型比例
+ # ========== 2) ==========
+ # ratio: cell
 stopifnot(!anyDuplicated(rownames(ratio)))
 
 X_mat <- as.matrix(ratio)
 storage.mode(X_mat) <- "double"
 
-# 保持为 Python 对象（不自动转换）
+ # Python
 X_pd <- pandas_py$DataFrame(
   data = r_to_py(X_mat, convert = TRUE),
   index = r_to_py(rownames(ratio), convert = TRUE),
@@ -271,12 +245,12 @@ X_pd <- pandas_py$DataFrame(
   dtype = numpy_py$float64
 )
 
-# ========== 3) 指定起始细胞 ==========
-root_id <- "Pa59"  # 根据你的数据选择
+ # ========== 3) ==========
+root_id <- "Pa59"
 message("Palantir early cell (root): ", root_id)
 
-# ========== 4) 运行 Palantir 主流程 ==========
-# The 'knn' argument is correctly used here in run_diffusion_maps
+ # ========== 4) Palantir ==========
+ # The 'knn' argument is correctly used here in run_diffusion_maps
 dm_res <- palantir_py$utils$run_diffusion_maps(X_pd, n_components = as.integer(18),knn = as.integer(30))
 ms_res <- palantir_py$utils$determine_multiscale_space(dm_res)
 
@@ -286,17 +260,17 @@ pr_res <- palantir_py$core$run_palantir(
   num_waypoints = as.integer(40),
   knn = as.integer(30) # <--- Added this argument
 )
-# ========== 5) 提取 pseudotime 和 fate bias ==========
-# 转换为 R 对象
+ # ========== 5) pseudotime fate bias ==========
+ # R
 pseudotime <- pandas_py$DataFrame(pr_res$pseudotime)
 pseudotime
 
 fate_probs <- pandas_py$DataFrame(pr_res$branch_probs)
 
-# 合并成一个 data frame
+ # data frame
 palantir_py_df <- pandas_py$concat(
   list(pseudotime, fate_probs),
-  axis = as.integer(1)  # 横向合并
+  axis = as.integer(1)
 )
 
 palantir_df <- py_to_r(palantir_py_df)
@@ -307,7 +281,6 @@ colnames(palantir_df) <- c("sampleID","pseudotime")
 head(palantir_df)
 
 df_2d$pseudotime <- palantir_df$pseudotime
-
 
 p3 <- ggplot(df_2d, aes(PHATE1, PHATE2, color = pseudotime)) +
   geom_point(size = 3) +
@@ -322,30 +295,26 @@ print(p3)
 
 df_2d[order(df_2d$pseudotime),c("sampleID","pseudotime")]
 
-
 write.csv(df_2d,"/home/zwj/raid1/MSD/data/h5ad2/PATHE.csv")
 
-
-# =========================
-# 7) Palantir part1
-# =========================
+ # 7) Palantir part1
 suppressPackageStartupMessages({
   library(tidyverse)
   library(mgcv)
   library(reticulate)
   suppressWarnings({
-    if (!requireNamespace("compositions", quietly = TRUE)) message("建议安装 compositions 包以做 CLR 变换")
+    if (!requireNamespace("compositions", quietly = TRUE)) message("Installing the compositions package is recommended for CLR transformation")
   })
 })
 
-# ========== 1) 用 Palantir 计算拟时间 ==========
-# 初始化 Python 模块
+ # ========== 1) Palantir ==========
+ # Python
 palantir_py <- import("palantir", convert = FALSE)
 pandas_py   <- import("pandas",   convert = FALSE)
 numpy_py    <- import("numpy",    convert = FALSE)
 
-# ========== 2) 准备输入数据 ==========
-# ratio: 行是样本（cell），列是亚型比例
+ # ========== 2) ==========
+ # ratio: cell
 stopifnot(!anyDuplicated(rownames(ratio)))
 
 Lin1 <- df_2d[df_2d$clusters %in% c("3","1","2"),]
@@ -355,7 +324,7 @@ Lin1_ratio
 X_mat <- as.matrix(Lin1_ratio)
 storage.mode(X_mat) <- "double"
 
-# 保持为 Python 对象（不自动转换）
+ # Python
 X_pd <- pandas_py$DataFrame(
   data = r_to_py(X_mat, convert = TRUE),
   index = r_to_py(rownames(Lin1_ratio), convert = TRUE),
@@ -363,12 +332,12 @@ X_pd <- pandas_py$DataFrame(
   dtype = numpy_py$float64
 )
 
-# ========== 3) 指定起始细胞 ==========
-root_id <- "Pa59"  # 根据你的数据选择
+ # ========== 3) ==========
+root_id <- "Pa59"
 message("Palantir early cell (root): ", root_id)
 
-# ========== 4) 运行 Palantir 主流程 ==========
-# The 'knn' argument is correctly used here in run_diffusion_maps
+ # ========== 4) Palantir ==========
+ # The 'knn' argument is correctly used here in run_diffusion_maps
 dm_res <- palantir_py$utils$run_diffusion_maps(X_pd, n_components = as.integer(20),knn = as.integer(10))
 ms_res <- palantir_py$utils$determine_multiscale_space(dm_res)
 
@@ -378,17 +347,17 @@ pr_res <- palantir_py$core$run_palantir(
   num_waypoints = as.integer(40),
   knn = as.integer(10) # <--- Added this argument
 )
-# ========== 5) 提取 pseudotime 和 fate bias ==========
-# 转换为 R 对象
+ # ========== 5) pseudotime fate bias ==========
+ # R
 pseudotime <- pandas_py$DataFrame(pr_res$pseudotime)
 pseudotime
 
 fate_probs <- pandas_py$DataFrame(pr_res$branch_probs)
 
-# 合并成一个 data frame
+ # data frame
 palantir_py_df <- pandas_py$concat(
   list(pseudotime, fate_probs),
-  axis = as.integer(1)  # 横向合并
+  axis = as.integer(1)
 )
 
 palantir_df <- py_to_r(palantir_py_df)
@@ -416,27 +385,24 @@ Lin1[order(Lin1$pseudotime),c("sampleID","pseudotime")]
 
 write.csv(Lin1,"/home/zwj/raid1/MSD/data/h5ad2/Lin1.csv")
 
-
-# =========================
-# 7) Palantir part2
-# =========================
+ # 7) Palantir part2
 suppressPackageStartupMessages({
   library(tidyverse)
   library(mgcv)
   library(reticulate)
   suppressWarnings({
-    if (!requireNamespace("compositions", quietly = TRUE)) message("建议安装 compositions 包以做 CLR 变换")
+    if (!requireNamespace("compositions", quietly = TRUE)) message("Installing the compositions package is recommended for CLR transformation")
   })
 })
 
-# ========== 1) 用 Palantir 计算拟时间 ==========
-# 初始化 Python 模块
+ # ========== 1) Palantir ==========
+ # Python
 palantir_py <- import("palantir", convert = FALSE)
 pandas_py   <- import("pandas",   convert = FALSE)
 numpy_py    <- import("numpy",    convert = FALSE)
 
-# ========== 2) 准备输入数据 ==========
-# ratio: 行是样本（cell），列是亚型比例
+ # ========== 2) ==========
+ # ratio: cell
 stopifnot(!anyDuplicated(rownames(ratio)))
 
 Lin2 <- df_2d[df_2d$clusters %in% c("3","0"),]
@@ -446,7 +412,7 @@ Lin2_ratio
 X_mat <- as.matrix(Lin2_ratio)
 storage.mode(X_mat) <- "double"
 
-# 保持为 Python 对象（不自动转换）
+ # Python
 X_pd <- pandas_py$DataFrame(
   data = r_to_py(X_mat, convert = TRUE),
   index = r_to_py(rownames(Lin2_ratio), convert = TRUE),
@@ -454,12 +420,12 @@ X_pd <- pandas_py$DataFrame(
   dtype = numpy_py$float64
 )
 
-# ========== 3) 指定起始细胞 ==========
-root_id <- "Pa59"  # 根据你的数据选择
+ # ========== 3) ==========
+root_id <- "Pa59"
 message("Palantir early cell (root): ", root_id)
 
-# ========== 4) 运行 Palantir 主流程 ==========
-# The 'knn' argument is correctly used here in run_diffusion_maps
+ # ========== 4) Palantir ==========
+ # The 'knn' argument is correctly used here in run_diffusion_maps
 dm_res <- palantir_py$utils$run_diffusion_maps(X_pd, n_components = as.integer(18),knn = as.integer(13))
 ms_res <- palantir_py$utils$determine_multiscale_space(dm_res)
 
@@ -469,17 +435,17 @@ pr_res <- palantir_py$core$run_palantir(
   num_waypoints = as.integer(40),
   knn = as.integer(13) # <--- Added this argument
 )
-# ========== 5) 提取 pseudotime 和 fate bias ==========
-# 转换为 R 对象
+ # ========== 5) pseudotime fate bias ==========
+ # R
 pseudotime <- pandas_py$DataFrame(pr_res$pseudotime)
 pseudotime
 
 fate_probs <- pandas_py$DataFrame(pr_res$branch_probs)
 
-# 合并成一个 data frame
+ # data frame
 palantir_py_df <- pandas_py$concat(
   list(pseudotime, fate_probs),
-  axis = as.integer(1)  # 横向合并
+  axis = as.integer(1)
 )
 
 palantir_df <- py_to_r(palantir_py_df)

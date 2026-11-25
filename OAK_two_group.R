@@ -8,15 +8,12 @@ library(survminer)
 library(GSVA)
 library(ggsci)
 
-# -------------------------------------------------------------------------
-# 1. 数据读取与预处理
-# -------------------------------------------------------------------------
-OAK.meta <- read.csv("/home/zwj/raid1/neoadjuvant/epi/ICB_bulk/Genetech/EGAF00005797822/go28915_anon_subsetted_BYN_n699.csv")
+OAK.meta <- read.csv("./EGAF00005797822/go28915_anon_subsetted_BYN_n699.csv")
 dim(OAK.meta)
 head(OAK.meta)
 table(OAK.meta$HIST)
 
-OAK <- read.csv("/home/zwj/raid1/neoadjuvant/epi/ICB_bulk/Genetech/EGAF00005797824/anonymized_OAK-TPMs2.csv")
+OAK <- read.csv("./EGAF00005797824/anonymized_OAK-TPMs2.csv")
 dim(OAK)
 OAK[1:5,1:5]
 
@@ -28,10 +25,8 @@ head(OAK.meta)
 dim(OAK.meta)
 dim(OAK)
 
-
 OAK.meta$sample <- colnames(OAK)
 head(OAK.meta)
-
 
 OAK.meta <- OAK.meta[OAK.meta$HIST %in% c("SQUAMOUS"),]
 OAK <- OAK[,OAK.meta$sample]
@@ -48,10 +43,6 @@ chemo.sampleID <- OAK.meta.chemo$sample
 OAK.chemo <- OAK[, chemo.sampleID]
 dim(OAK.chemo)
 
-# -------------------------------------------------------------------------
-# 2. 获取数据：CAF GSVA评分
-# -------------------------------------------------------------------------
-# 【注意】确保环境中已经有 markers 这个变量！
 geneSets = list(
   CAF_Score =  c("SPHK1","POSTN","MMP11","SULF1","COL11A1","TMEM158","TNFAIP6",
                  "ADAMTS12","SLC16A3","LOXL2","MICAL2","SDC1","NREP","CYTOR",
@@ -83,26 +74,21 @@ geneSets = list(
   )
 )
 
-
-# 运行 GSVA (注意：新版 GSVA >= 1.50.0 语法可能变为 gsva(gsvaParam(exprData, geneSets)))
-# 这里保留你的旧版语法，如果报错请留意 GSVA 版本
 gsva_results <- gsva(as.matrix(OAK.ICI), 
                      geneSets, 
                      method="ssgsea",
                      kcdf="Gaussian", 
                      abs.ranking = TRUE)
 
-# 准备 GSVA 数据
 gsva_t <- as.data.frame(t(gsva_results))
 gsva_t$sample <- rownames(gsva_t)
 
-# 合并 Meta + GSVA
 fit.data <- OAK.meta.ICI %>%
   left_join(gsva_t, by = "sample")
 
 head(fit.data)
 
-cytokine <- read.csv("/home/zwj/raid1/MSD/data/cytosig/OAK_cytosig.csv")
+cytokine <- read.csv("./OAK_cytosig.csv")
 rownames(cytokine) <- cytokine$X
 cytokine <- cytokine[,-1]
 rownames(cytokine) <- gsub("^.*-", "", rownames(cytokine))
@@ -114,21 +100,14 @@ head(cytokine)
 fit.data$IFNG <- cytokine$IFNG
 head(fit.data)
 
-
-# -------------------------------------------------------------------------
-# 3. 生存数据过滤与分组 (联合 CAF_Score 和 IFNG，双高 vs 其他)
-# -------------------------------------------------------------------------
 event_col <- "OS_CENSOR" 
 time_col <- "OS_MONTHS"
 
-# 过滤掉生存时间或状态为 NA 的样本
 fit.data <- fit.data[!is.na(fit.data[[time_col]]) & !is.na(fit.data[[event_col]]), ]
 
-# 计算中位数
 median_CAF <- median(fit.data$CAF_Score, na.rm = TRUE)
 median_IFNG <- median(fit.data$IFNG, na.rm = TRUE)
 
-# 根据中位数划分为 high 和 low (大于等于中位数为 high，小于为 low)
 fit.data$CAF_Status <- ifelse(fit.data$CAF_Score >= median_CAF, "high", "low")
 fit.data$IFNG_Status <- ifelse(fit.data$IFNG >= median_IFNG, "high", "low")
 
@@ -140,16 +119,10 @@ fit.data$Final_Group <- case_when(
   TRUE ~ "Others"
 )
 
-print("联合分组人数统计：")
 print(table(fit.data$Final_Group, fit.data$BCOR))
 
-# -------------------------------------------------------------------------
-# 4. 生存分析与绘图
-# -------------------------------------------------------------------------
-# 直接在 survfit 中写明具体的列名，避免 ggsurvplot 无法解析动态公式(symbol)的bug
 fit <- survfit(Surv(OS_MONTHS, OS_CENSOR) ~ Final_Group, data = fit.data)
 
-# 2个组需要2种颜色，保留了原先的红蓝配色
 my_palette <- c("#DC0000B2", "#3C5488B2") 
 
 p <- ggsurvplot(fit,
@@ -164,13 +137,8 @@ p <- ggsurvplot(fit,
                 xlab = "Months from surgery",
                 title = "OS by CAF Score and IFNG", 
                 legend.title = "Combined Group",
-                legend.labs = c("Both High", "Others"), # 更新图例标签
+                legend.labs = c("Both High", "Others"), 
                 palette = my_palette
 )
 
 print(p)
-
-# 保存图片 (修改了文件名以区分之前的4组结果)
-pdf("/home/zwj/raid1/neoadjuvant/epi/figure/OAK_CAF_IFNG_Combined_TwoGroups.pdf", width = 8, height = 7)
-print(p)
-dev.off()

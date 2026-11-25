@@ -7,7 +7,6 @@ suppressPackageStartupMessages({
   library(tibble)
 })
 
-# ---------- 数据读取与对齐 ----------
 Lin1 <- read.csv("/home/zwj/raid1/MSD/data/h5ad2/Lin1.csv") |> as.data.frame()
 
 T_cell <- read.csv("/home/zwj/raid1/MSD/data/h5ad2/T_harmony.csv") |>
@@ -51,15 +50,14 @@ ratio <- all_df |>
   tidyr::pivot_wider(names_from = cell.type, values_from = Freq, values_fill = 0) |>
   tibble::column_to_rownames("sampleID")
 
-# 可选：去掉带 S 的样本
+ # S
 ratio <- ratio[!grepl("S", rownames(ratio)), , drop = FALSE]
 ratio
 
 ratio$CD8T_Tem_GZMK <- ratio$CD8T_Tem_NR4A1high + ratio$CD8T_Tem_NR4A1low
 ratio <- ratio[, !names(ratio) %in% c("CD8T_Tem_NR4A1high", "CD8T_Tem_NR4A1low")]
 
-
-# 对齐 Lin1 与矩阵
+ # Lin1
 expr_mat <- ratio
 samples <- intersect(Lin1$sampleID, rownames(expr_mat))
 stopifnot(length(samples) > 0)
@@ -71,17 +69,15 @@ stopifnot(identical(rownames(expr_mat), rownames(Lin1)))
 head(Lin1)
 
 Lin1$CD8T_Tem_GZMK <- Lin1$CD8T_Tem_NR4A1high + Lin1$CD8T_Tem_NR4A1low
-# 可选：去除指定样本
 drop_ids <- c("Pa164")
 keep_rows <- !rownames(expr_mat) %in% drop_ids
 expr_mat <- expr_mat[keep_rows, , drop = FALSE]
 Lin1 <- Lin1[keep_rows, , drop = FALSE]
 
-# --------- 参数：目标“细胞类型指标”列名（来自 Lin1）---------
-# 例如你在 Lin1 里存了 CD8Tex/CD4Treg 的比例或某个组合指标
+# --------- Target cell-type metric column (from Lin1) ---------
+# e.g. Lin1 stores CD8Tex/CD4Treg proportions or a combined metric
 target_cluster <- "CD4T_Treg_TNFRSF9high"
 
-# --------- 工具函数 ----------
 winsorize <- function(v, p = 0.01) {
   q <- stats::quantile(v, probs = c(p, 1 - p), na.rm = TRUE)
   v[v < q[1]] <- q[1]; v[v > q[2]] <- q[2]; v
@@ -109,11 +105,9 @@ weighted_cor <- function(a, b, w) {
   if (den == 0) return(NA_real_) else num / den
 }
 
-# --------- 拟合与相似度 ----------
 x <- as.numeric(Lin1$pseudotime)
 grid_x <- seq(min(x, na.rm = TRUE), max(x, na.rm = TRUE), length.out = 200)
 
-# 样本权重（如果你仍想按目标指标大小加权，可保留；不想要就设为均匀权重）
 w <- as.numeric(Lin1[[target_cluster]])
 w <- ifelse(is.na(w), 0, w)
 w <- w / (sum(w) + 1e-12)
@@ -123,7 +117,7 @@ y_target <- winsorize(as.numeric(Lin1[[target_cluster]]), p = 0.01)
 target_curve <- predict_smooth(x, y_target, grid_x, span = 0.75)
 target_curve_z <- z(target_curve)
 
-# --------- 拟合与相似度 (增加 P 值) ----------
+ # --------- ( P ) ----------
 res <- purrr::map_dfr(colnames(expr_mat), function(ct) {
   y_ct <- winsorize(as.numeric(expr_mat[[ct]]), p = 0.01)
   curve_ct <- predict_smooth(x, y_ct, grid_x, span = 0.75)
@@ -132,21 +126,20 @@ res <- purrr::map_dfr(colnames(expr_mat), function(ct) {
   
   curve_ct_z <- z(curve_ct)
   
-  # 使用 cor.test 同时计算相关系数和 p 值
+ # cor.test p
   test_res <- suppressWarnings(
     stats::cor.test(target_curve_z, curve_ct_z, use = "pairwise.complete.obs", method = "pearson")
   )
   
   tibble::tibble(
     cell_type = ct,
-    pearson_curve = as.numeric(test_res$estimate),  # 相关系数
-    p_value = as.numeric(test_res$p.value),         # 原始 P 值
+    pearson_curve = as.numeric(test_res$estimate),
+    p_value = as.numeric(test_res$p.value), # P
     cosine_curve  = cosine_sim(target_curve_z, curve_ct_z),
     w_cor_points  = weighted_cor(y_target, y_ct, w_norm)
   )
 }) |>
   dplyr::filter(is.finite(pearson_curve), is.finite(cosine_curve)) |>
-  # 增加显著性标记列
   dplyr::mutate(
     p_adj = p.adjust(p_value, method = "fdr"),
     sig_label = ifelse(p_adj < 0.001, "***", 
@@ -155,19 +148,17 @@ res <- purrr::map_dfr(colnames(expr_mat), function(ct) {
   ) |>
   dplyr::arrange(dplyr::desc(pearson_curve))
 
-# 查看带 P 值的结果
+ # P
 head(res, 30)
 
-# 如不再需要任何过滤，直接用排序结果；若希望剔除负相关：
-# res <- res |> dplyr::filter(w_cor_points > 0)
+ # res <- res |> dplyr::filter(w_cor_points > 0)
 
 write.csv(res, "/home/zwj/raid1/MSD/data/h5ad2/CD4T_Treg_corr.csv")
 
-# --------- 选 Top 进行可视化 ----------
+ # --------- Top ----------
 res_plot <- res |>
   dplyr::slice_max(order_by = pearson_curve, n = 10)
 head(res_plot)
-
 
 plot_top <- function(ct_vec) {
   ct_vec <- unique(ct_vec[ct_vec != target_cluster])
