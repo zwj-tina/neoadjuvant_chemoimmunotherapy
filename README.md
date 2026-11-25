@@ -17,11 +17,22 @@ neoadjuvant pembrolizumab plus platinum-doublet chemotherapy in stage II–IIIB 
 | Script | Purpose |
 |---|---|
 | `BEYOND_T_cell_type.R` | Converts sample × subcluster counts to proportions and builds the pre- to post-treatment alluvial flow of T-cell subpopulations; calls Scanpy/PHATE/Palantir through `reticulate`. |
+| `PATHE_cluster.R` | PHATE-based cluster analysis: CD8Tem cluster boxplots, pseudotime ridge densities, response-distribution bars, and per-cluster Fisher tests with OR and FDR. |
+| `LUSC_pre_post_cluster_Sankey.R` | Alluvial/Sankey flow of pre- to post-treatment PHATE clusters, faceted by pathological response, with a post-cluster response bar chart. |
+| `LUSC_post_mapping_UMAP.R` | KNN mapping of post-treatment samples onto the pre-treatment PHATE reference (`FNN`), cluster prediction, and a combined pre/post PHATE plot. |
 | `find_co_change_cell_type_based_on_trajectory.R` | Identifies cell types that change together along the inferred trajectory and ranks their associations (with P values). |
-| `forestplot.R` | Univariable logistic-regression forest plot of baseline clinical and PD-L1 variables against major pathological response (MPR). |
 | `gene_search_by_similiar_trajectory.R` | Searches for genes whose expression trajectories parallel the change of a target cell type, using weighted and winsorized correlations. |
 | `remodeling_index.R` | Computes the tumor-remodeling index against the continuous pathological response, with pre/post reshaping and `ComplexHeatmap` visualization. |
+| `delta_corr.R` | Log2 post/pre deltas of Treg frequency versus a gene list; Pearson/Spearman correlations with BH FDR; lollipop, scatter and heatmap outputs. |
+| `covarition_module_heatmap.R` | Decoupled XGBoost (baseline vs. change) with SHAP gene effects, a nine-grid quadrant scatter, a grouped `ComplexHeatmap`, and per-gene expression verification. |
+| `forestplot.R` | Univariable logistic-regression forest plot of baseline clinical and PD-L1 variables against major pathological response (MPR). |
+| `waterfall_plot.R` | Waterfall plot of per-patient pathological response rates, with PD-L1 and TNM stacked bars, a histology MPR barplot, and a chi-square test. |
+| `LUAD_AUC_predict.R` | Fibroblast subtype grouping and logistic models (activated stroma, PD-L1, combined) for MPR in LUAD; ROC/AUC with DeLong comparison tests. |
 | `OAK_two_group.R` | External validation in the OAK cohort: CAF GSVA scoring, two-group comparisons, and survival (PFS/OS) analyses. |
+| `TCGA_two_group.R` | TCGA-LUAD CAF ssGSEA score and IFNG; double-high vs. other groups with Kaplan–Meier overall-survival curves. |
+| `TCGA_double_high.R` | TCGA-LUSC cDC2 (IL4I1) and Treg ssGSEA scores; cutpoint-based high/low grouping, double-high vs. others, and Kaplan–Meier curves. |
+| `OAK_IL4I1.R` | OAK squamous cohort: median-based IL4I1 high/low grouping and Kaplan–Meier progression-free-survival curves. |
+| `organoid_n3.R` | Patient-derived organoid (n = 3) drug sensitivity: normalization, paired t-tests with BH, mixed-effects models, and bar plots with individual trajectories. |
 
 ---
 
@@ -37,15 +48,17 @@ neoadjuvant pembrolizumab plus platinum-doublet chemotherapy in stage II–IIIB 
 CRAN packages:
 
 ```
-broom, circlize, dplyr, forcats, ggalluvial, ggplot2, ggpubr, ggrepel, ggsci, ggsurvfit,
-gridExtra, matrixStats, mgcv, pheatmap, purrr, readxl, reticulate, scales, SHAPforxgboost,
-slingshot, stringr, survival, survminer, tibble, tidyr, tidyverse, viridis, xgboost
+FNN, SHAPforxgboost, Seurat, broom, caret, circlize, compositions, dplyr, emmeans, forcats,
+ggalluvial, ggplot2, ggpubr, ggrepel, ggridges, ggsci, ggsurvfit, gridExtra, lmerTest,
+matrixStats, mgcv, pROC, patchwork, pbkrtest, pheatmap, plyr, purrr, readxl, reshape2,
+reticulate, rstatix, scales, stringr, survival, survminer, tibble, tidyr, tidyverse,
+viridis, xgboost
 ```
 
 Bioconductor packages:
 
 ```
-ComplexHeatmap, GSVA, limma
+ComplexHeatmap, GSVA, limma, slingshot
 ```
 
 Version-validated components in the manuscript: R **4.1.2**, Seurat **5.3.0**, Slingshot
@@ -66,13 +79,14 @@ processing used Cell Ranger **6.1.2** (10x Genomics), which is not part of this 
 2. Install the package dependencies:
 
 ```r
-install.packages(c("broom","circlize","dplyr","forcats","ggalluvial","ggplot2","ggpubr",
-  "ggrepel","ggsci","ggsurvfit","gridExtra","matrixStats","mgcv","pheatmap","purrr",
-  "readxl","reticulate","scales","SHAPforxgboost","slingshot","stringr","survival",
-  "survminer","tibble","tidyr","tidyverse","viridis","xgboost"))
+install.packages(c("FNN","SHAPforxgboost","Seurat","broom","caret","circlize","compositions",
+  "dplyr","emmeans","forcats","ggalluvial","ggplot2","ggpubr","ggrepel","ggridges","ggsci",
+  "ggsurvfit","gridExtra","lmerTest","matrixStats","mgcv","pROC","patchwork","pbkrtest",
+  "pheatmap","plyr","purrr","readxl","reshape2","reticulate","rstatix","scales","stringr",
+  "survival","survminer","tibble","tidyr","tidyverse","viridis","xgboost"))
 
 if (!requireNamespace("BiocManager", quietly=TRUE)) install.packages("BiocManager")
-BiocManager::install(c("ComplexHeatmap","GSVA","limma"))
+BiocManager::install(c("ComplexHeatmap","GSVA","limma","slingshot"))
 ```
 
 3. Configure the Python environment used by `reticulate` (a conda environment is recommended):
@@ -98,7 +112,8 @@ After obtaining access (or substituting your own equivalently formatted data):
 
 - run any individual script with `Rscript <script>.R` (or source it interactively);
 - expected outputs are the figures and summary tables reported in the manuscript, including
-  the alluvial flow, forest plot, trajectory/remodeling heatmaps, and OAK survival curves.
+  the alluvial and Sankey flows, forest and waterfall plots, trajectory/remodeling heatmaps,
+  ROC curves, and OAK/TCGA survival curves.
 
 **Expected run time:** from seconds to a few minutes per script on a normal desktop once the
 input data and packages are available; the `reticulate` Python steps may take longer on the
@@ -110,9 +125,11 @@ first run.
 
 1. Obtain the controlled-access data (HRA019014) or prepare matched input files with the same
    column/object structure referenced in each script.
-2. **Edit the input paths before running.** The scripts contain the original authors' local
-   paths (for example `/home/zwj/...`); replace these with the locations of your downloaded
-   data and annotation objects.
+2. The scripts use **relative paths** under two top-level folders:
+   - `MSD/` — study inputs (`MSD/data/...`) and generated figures (`MSD/figure/...`);
+   - `neoadjuvant/` — external-cohort data and figures (`neoadjuvant/epi/...`).
+   Set your working directory to the repository root (or any directory containing these two
+   folders), or edit the relative paths to match your local data layout.
 3. Source the scripts in an R session or run them with `Rscript`. The alluvial and trajectory
    steps additionally require the configured `reticulate` Python environment above.
 4. Random seeds are fixed for the stochastic analyses; the statistical tests and
